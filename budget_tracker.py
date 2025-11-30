@@ -1416,6 +1416,21 @@ if not expenses_df.empty:
     expenses_df['WeekDay'] = expenses_df['Date'].dt.dayofweek
     expenses_df['Month'] = expenses_df['Date'].dt.to_period('M').astype(str)
 
+# Budget goals in sidebar (MUST be defined before tabs that use it)
+st.sidebar.header("💵 Budget Goals")
+st.sidebar.markdown("*Set monthly budget limits per category*")
+
+budget_goals = {}
+for cat in sorted(df["Category"].unique()):
+    default_val = 500.0 if cat not in ["Income/Payments"] else 0.0
+    budget_goals[cat] = st.sidebar.number_input(
+        f"{cat}",
+        min_value=0.0,
+        value=default_val,
+        step=50.0,
+        key=f"budget_{cat}"
+    )
+
 # Create tabs for organized viewing
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Overview", "📅 Time Patterns", "🏷️ Categories", "💳 Cards", "🎯 Goals & Forecasts", "💰 Merchant Insights"])
 
@@ -1760,7 +1775,7 @@ with tab5:
     
     with col1:
         st.markdown("**💵 Budget Performance Overview**")
-        if not expenses_df.empty and 'budget_goals' in locals():
+        if not expenses_df.empty:
             # Calculate budget metrics
             budget_data = []
             for cat in expenses_df['Category'].unique():
@@ -1809,7 +1824,7 @@ with tab5:
             else:
                 st.info("Set budget goals in sidebar to see analysis")
         else:
-            st.info("Set budget goals in sidebar")
+            st.info("No expense data available")
     
     with col2:
         st.markdown("**📈 Spending Forecast (Next 7 Days)**")
@@ -1858,6 +1873,8 @@ with tab5:
     
     # Full width: Financial Health Dashboard
     st.markdown("**💎 Financial Health Snapshot**")
+    st.caption("📊 Four key metrics to track your financial health and spending behavior")
+    
     if not expenses_df.empty:
         col1, col2, col3, col4 = st.columns(4)
         
@@ -1885,12 +1902,55 @@ with tab5:
             ))
             fig.update_layout(height=250)
             st.plotly_chart(fig, use_container_width=True)
+            with st.expander("ℹ️ About Savings Rate"):
+                st.markdown("""
+                <div style='background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%); padding: 15px; border-radius: 10px; margin-bottom: 15px;'>
+                    <h4 style='margin:0; color: #065F46;'>💰 Savings Rate</h4>
+                    <p style='margin:5px 0 0 0; color: #047857;'>Measures how much income you're keeping vs spending</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown("**📐 Formula**")
+                    st.code("(Income - Expenses) / Income × 100")
+                with col_b:
+                    st.markdown("**🎯 Target**")
+                    st.markdown("- 🟢 50%+ Excellent\n- 🟡 20-50% Good\n- 🔴 <20% Low")
+                
+                # Personalized insights
+                st.markdown("---")
+                st.markdown("### 📊 Your Personal Analysis")
+                
+                col_x, col_y, col_z = st.columns(3)
+                with col_x:
+                    st.metric("💵 Income", f"${total_income:,.2f}")
+                with col_y:
+                    st.metric("💸 Expenses", f"${total_expenses:,.2f}")
+                with col_z:
+                    st.metric("💎 Net Savings", f"${total_income - total_expenses:,.2f}")
+                
+                st.markdown(f"<h3 style='text-align: center; color: #10B981;'>Your Rate: {savings_rate:.1f}%</h3>", unsafe_allow_html=True)
+                
+                if savings_rate >= 50:
+                    st.success("🌟 **Outstanding!** You're saving more than half your income - keep it up!")
+                elif savings_rate >= 20:
+                    st.info(f"✅ **Great job!** You're building healthy savings habits at {savings_rate:.0f}%")
+                elif savings_rate > 0:
+                    st.warning(f"⚠️ **Room to Improve** - Currently at {savings_rate:.0f}% savings")
+                    needed = (total_income * 0.20) - (total_income - total_expenses)
+                    if needed > 0:
+                        st.markdown(f"💡 **Action Step:** Cut **${needed:,.2f}** in expenses to reach 20% savings rate")
+                else:
+                    st.error("🚨 **Alert:** Spending exceeds income!")
+                    st.markdown(f"💡 **Urgent:** Need to reduce expenses by **${abs(total_income - total_expenses):,.2f}**")
+
         
         with col2:
             # Spending efficiency (vs budget)
-            if 'budget_goals' in locals():
-                total_budget = sum(v for k, v in budget_goals.items() if k != "Income/Payments" and v > 0)
-                efficiency = (total_budget - total_expenses) / total_budget * 100 if total_budget > 0 else 0
+            total_budget = sum(v for k, v in budget_goals.items() if k != "Income/Payments" and v > 0)
+            if total_budget > 0:
+                efficiency = (total_budget - total_expenses) / total_budget * 100
                 
                 fig = go.Figure(go.Indicator(
                     mode="gauge+number",
@@ -1909,8 +1969,63 @@ with tab5:
                 ))
                 fig.update_layout(height=250)
                 st.plotly_chart(fig, use_container_width=True)
+                with st.expander("ℹ️ About Budget Efficiency"):
+                    st.markdown("""
+                    <div style='background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%); padding: 15px; border-radius: 10px; margin-bottom: 15px;'>
+                        <h4 style='margin:0; color: #1E40AF;'>📊 Budget Efficiency</h4>
+                        <p style='margin:5px 0 0 0; color: #1E3A8A;'>How well you're staying within budget limits</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.markdown("**📐 Formula**")
+                        st.code("(Budget - Spent) / Budget × 100")
+                    with col_b:
+                        st.markdown("**🎯 Rating**")
+                        st.markdown("- 🟢 50%+ Excellent\n- 🟡 20-50% Good\n- 🟠 0-20% Caution\n- 🔴 0% Over")
+                    
+                    # Personalized insights
+                    st.markdown("---")
+                    st.markdown("### 📊 Your Budget Status")
+                    
+                    col_x, col_y, col_z = st.columns(3)
+                    with col_x:
+                        st.metric("🎯 Budget", f"${total_budget:,.2f}")
+                    with col_y:
+                        st.metric("💸 Spent", f"${total_expenses:,.2f}")
+                    with col_z:
+                        remaining_val = total_budget - total_expenses
+                        st.metric("💰 Remaining", f"${remaining_val:,.2f}", 
+                                 delta=f"{(remaining_val/total_budget*100):.0f}%" if total_budget > 0 else "0%")
+                    
+                    st.markdown(f"<h3 style='text-align: center; color: #3B82F6;'>Efficiency: {max(0, efficiency):.1f}%</h3>", unsafe_allow_html=True)
+                    
+                    if efficiency >= 50:
+                        st.success(f"🌟 **Excellent!** You're {efficiency:.0f}% under budget - fantastic discipline!")
+                    elif efficiency >= 20:
+                        st.info(f"✅ **Good progress!** You have a {efficiency:.0f}% buffer remaining.")
+                    elif efficiency > 0:
+                        st.warning(f"⚠️ **Caution:** Only {efficiency:.0f}% budget left - slow down spending!")
+                    else:
+                        overspent = abs(total_budget - total_expenses)
+                        st.error(f"🚨 **Over Budget** by ${overspent:,.2f}!")
+                        st.markdown(f"📈 You've spent **{(total_expenses/total_budget*100):.0f}%** of your budget")
+                        
+                        # Show which categories are over
+                        over_cats = []
+                        for cat in expenses_df['Category'].unique():
+                            cat_spent = expenses_df[expenses_df['Category'] == cat]['Amount'].sum()
+                            cat_budget = budget_goals.get(cat, 0)
+                            if cat_budget > 0 and cat_spent > cat_budget:
+                                over_cats.append((cat, cat_spent - cat_budget))
+                        
+                        if over_cats:
+                            st.markdown("**🔴 Categories Over Budget:**")
+                            for cat, over_amount in sorted(over_cats, key=lambda x: x[1], reverse=True)[:3]:
+                                st.markdown(f"  • **{cat}**: ${over_amount:.2f} over")
             else:
-                st.info("Set budgets")
+                st.info("Set budget goals in sidebar")
         
         with col3:
             # Category diversity (how spread out spending is)
@@ -1929,6 +2044,52 @@ with tab5:
             ))
             fig.update_layout(height=250)
             st.plotly_chart(fig, use_container_width=True)
+            with st.expander("ℹ️ About Spending Diversity"):
+                st.markdown("""
+                <div style='background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); padding: 15px; border-radius: 10px; margin-bottom: 15px;'>
+                    <h4 style='margin:0; color: #92400E;'>🎨 Spending Diversity</h4>
+                    <p style='margin:5px 0 0 0; color: #B45309;'>How spread out your spending is across categories</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown("**📐 Formula**")
+                    st.code("Categories Used / 15 × 100")
+                with col_b:
+                    st.markdown("**📊 Interpretation**")
+                    st.markdown("- 🟢 70%+ High\n- 🟡 40-70% Balanced\n- 🟠 <40% Focused")
+                
+                # Personalized insights
+                st.markdown("---")
+                st.markdown("### 📊 Your Spending Pattern")
+                
+                col_x, col_y = st.columns(2)
+                with col_x:
+                    st.metric("📁 Categories Used", f"{len(cat_spending)} / 15")
+                with col_y:
+                    st.metric("🎯 Diversity Score", f"{diversity:.1f}%")
+                
+                # Show top categories with visual bars
+                st.markdown("**🏆 Top 3 Spending Categories:**")
+                top_cats = cat_spending.nlargest(3)
+                for i, (cat, amount) in enumerate(top_cats.items(), 1):
+                    pct = (amount / total_expenses * 100)
+                    medal = ["🥇", "🥈", "🥉"][i-1]
+                    st.markdown(f"{medal} **{cat}**")
+                    st.progress(pct / 100)
+                    st.caption(f"${amount:,.2f} ({pct:.1f}% of total spending)")
+                    if i < 3:
+                        st.markdown("")
+                
+                st.markdown("---")
+                if diversity >= 70:
+                    st.info("📊 **High diversity** - You're spending across many lifestyle categories")
+                elif diversity >= 40:
+                    st.success("📊 **Balanced diversity** - Good spread of spending across categories")
+                else:
+                    st.warning(f"📊 **Focused spending** - Concentrated in {len(cat_spending)} categories")
+                    st.caption("💡 Not necessarily bad - depends on your lifestyle and priorities!")
         
         with col4:
             # Transaction frequency score
@@ -1948,6 +2109,59 @@ with tab5:
             ))
             fig.update_layout(height=250)
             st.plotly_chart(fig, use_container_width=True)
+            with st.expander("ℹ️ About Activity Score"):
+                st.markdown("""
+                <div style='background: linear-gradient(135deg, #E9D5FF 0%, #D8B4FE 100%); padding: 15px; border-radius: 10px; margin-bottom: 15px;'>
+                    <h4 style='margin:0; color: #6B21A8;'>⚡ Activity Score</h4>
+                    <p style='margin:5px 0 0 0; color: #7C3AED;'>How frequently you make transactions</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown("**📐 Formula**")
+                    st.code("Days with Txns / Total Days × 100")
+                with col_b:
+                    st.markdown("**📊 Pattern**")
+                    st.markdown("- 🟢 80%+ Daily\n- 🟡 50-80% Frequent\n- 🟠 <50% Infrequent")
+                
+                # Personalized insights
+                st.markdown("---")
+                st.markdown("### 📊 Your Transaction Pattern")
+                
+                col_x, col_y, col_z = st.columns(3)
+                with col_x:
+                    st.metric("📅 Active Days", f"{days_active}")
+                with col_y:
+                    st.metric("📆 Total Days", f"{total_days}")
+                with col_z:
+                    st.metric("😴 Inactive Days", f"{total_days - days_active}")
+                
+                # Show spending per day
+                avg_per_active_day = total_expenses / days_active if days_active > 0 else 0
+                avg_per_all_days = total_expenses / total_days if total_days > 0 else 0
+                
+                st.markdown("**💰 Spending Analysis:**")
+                col_x, col_y = st.columns(2)
+                with col_x:
+                    st.metric("Avg per Active Day", f"${avg_per_active_day:.2f}")
+                with col_y:
+                    st.metric("Avg per All Days", f"${avg_per_all_days:.2f}")
+                
+                st.markdown(f"<h3 style='text-align: center; color: #8B5CF6;'>Activity: {frequency_score:.1f}%</h3>", unsafe_allow_html=True)
+                
+                st.markdown("---")
+                if frequency_score >= 80:
+                    st.info("📊 **High activity** - You make transactions almost daily")
+                    st.caption("💡 Consider batching purchases to reduce fees and increase mindfulness")
+                elif frequency_score >= 50:
+                    st.success("📊 **Moderate activity** - Good balance between regular spending and planning")
+                    st.caption("💡 Your transaction frequency suggests planned spending habits")
+                else:
+                    st.info("📊 **Low activity** - You make infrequent, larger transactions")
+                    st.caption("💡 This pattern often indicates bulk shopping or batch payments")
+    else:
+        st.info("No expense data available")
 
 with tab6:
     st.subheader("💰 Merchant Insights & Spending Patterns")
@@ -2231,22 +2445,7 @@ st.divider()
 # Budget Tracking Section (moved to bottom)
 st.header("💰 Budget Management")
 
-# Budget goals in sidebar
-st.sidebar.header("💵 Budget Goals")
-st.sidebar.markdown("*Set monthly budget limits per category*")
-
-budget_goals = {}
-for cat in sorted(df["Category"].unique()):
-    default_val = 500.0 if cat not in ["Income/Payments"] else 0.0
-    budget_goals[cat] = st.sidebar.number_input(
-        f"{cat}",
-        min_value=0.0,
-        value=default_val,
-        step=50.0,
-        key=f"budget_{cat}"
-    )
-
-# Budget tracking display
+# Budget tracking display (budget_goals already defined in sidebar above)
 for cat in sorted(filtered_df["Category"].unique()):
     if cat == "Income/Payments":
         continue
