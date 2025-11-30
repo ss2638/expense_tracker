@@ -157,7 +157,29 @@ Four comprehensive health metrics:
 
 ---
 
-## 🛠️ Technology Stack
+## � Quick Start
+
+Get up and running in 3 simple steps:
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/ss2638/expense_tracker.git
+cd expense_tracker
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run the app
+streamlit run budget_tracker.py
+```
+
+**That's it!** The app will automatically open in your browser at `http://localhost:8501`
+
+> **Note:** Requires Python 3.9 or higher. If you don't have Python installed, download it from [python.org](https://www.python.org/downloads/)
+
+---
+
+## �🛠️ Technology Stack
 
 ### Core Framework
 - **[Streamlit 1.50.0](https://streamlit.io/)** - Web application framework
@@ -227,28 +249,43 @@ plotly==6.5.0
 
 ---
 
-## 🚀 Deployment
+## 🚀 Running the App
 
-### Local Deployment
+### Local Usage (Recommended for Personal Use)
 
-#### Option 1: Using Streamlit CLI
+**Basic Command:**
 ```bash
 streamlit run budget_tracker.py
 ```
 
-The app will open automatically at `http://localhost:8501`
+The app will automatically open at **http://localhost:8501**
 
-#### Option 2: Using Python Module
+**Alternative Options:**
+
+Using Python module:
 ```bash
 python -m streamlit run budget_tracker.py
 ```
 
-#### Custom Port
+Custom port:
 ```bash
 streamlit run budget_tracker.py --server.port 8080
 ```
 
-### Production Deployment
+Run in the background:
+```bash
+nohup streamlit run budget_tracker.py &
+```
+
+**Access from other devices on your network:**
+```bash
+streamlit run budget_tracker.py --server.address 0.0.0.0
+# Then visit: http://YOUR_LOCAL_IP:8501
+```
+
+---
+
+## 🌐 Production Deployment (Optional)
 
 #### Streamlit Community Cloud (Recommended)
 1. Push your code to GitHub
