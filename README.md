@@ -197,8 +197,8 @@ Four comprehensive health metrics:
 
 ### Step 1: Clone the Repository
 ```bash
-git clone https://github.com/ss2638/budget.git
-cd budget
+git clone https://github.com/ss2638/expense_tracker.git
+cd expense_tracker
 ```
 
 ### Step 2: Create Virtual Environment (Recommended)
@@ -350,14 +350,15 @@ docker run -p 8501:8501 budget-tracker
 ## 🧪 Supported Statement Formats
 
 ### Chase
-- **Pattern:** "Account Number: XXXX XXXX XXXX 4860"
-- **Balance:** "New Balance $994.09"
+- **Pattern:** "Account Number: XXXX XXXX XXXX XXXX"
+- **Balance:** "New Balance $XXX.XX"
 - **Transactions:** "MM/DD Description $Amount"
 
 ### Apple Card
-- **Pattern:** "Your October Balance... $488.49 $243.15 Nov 30, 2025"
-- **Due Date:** "Payment Due By Nov 30, 2025"
-- **Transactions:** "MM/DD Merchant Location $Amount"
+- **Pattern:** "Your [Month] Balance... $XXX.XX $XXX.XX [Date]"
+- **Due Date:** "Payment Due By [Date]"
+- **Transactions:** "MM/DD/YYYY Merchant Location Daily Cash% $X.XX $Amount"
+- **Format:** Includes daily cash rewards with each transaction
 
 ### Discover
 - **Pattern:** "NewBalance MinimumPayment PaymentDueDate"
@@ -369,12 +370,12 @@ docker run -p 8501:8501 budget-tracker
 - **Transactions:** "MM/DD Description $Amount"
 
 ### American Express
-- **Pattern:** "Account Ending5-05001"
+- **Pattern:** "Account Ending X-XXXXX"
 - **Transactions:** "MM/DD/YY Description $Amount"
 - **Multiple card support:** Cash Magnet, Gold, Platinum, Blue Cash
 
 ### Capital One
-- **Pattern:** "ending in 6165"
+- **Pattern:** "ending in XXXX"
 - **Foreign Currency:** Handles INR with USD conversion
 - **Transactions:** "MMM DD MMM DD Description $Amount"
 
@@ -390,9 +391,10 @@ docker run -p 8501:8501 budget-tracker
 - **Format:** Withdrawals (negative), Deposits (positive)
 
 ### Synchrony Bank (Lowe's)
-- **Pattern:** "Account Number ending in 698 0"
-- **Balance:** "New Balance: $117.11"
+- **Pattern:** "Account Number ending in XXXX"
+- **Balance:** "New Balance: $XXX.XX"
 - **Transactions:** "MM/DD Reference# Store Description $Amount"
+- **Special:** Captures multi-line product descriptions
 
 ---
 
@@ -514,7 +516,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 **Shivaneeth Raj Siliveru**
 - GitHub: [@ss2638](https://github.com/ss2638)
-- Repository: [budget](https://github.com/ss2638/budget)
+- Repository: [expense_tracker](https://github.com/ss2638/expense_tracker)
 
 ---
 
