@@ -40,31 +40,58 @@ A powerful, intelligent budget tracking application that automatically parses cr
 - Daily Burn Rate
 - Credit Utilization per card
 
-#### 📈 4-Tab Visualization System
+#### 📈 6-Tab Advanced Visualization System
 
 **1. Overview Tab:**
-- Daily spending with 3 moving averages (3-day, 7-day, 14-day)
-- Cumulative spending tracker with velocity metrics
-- Category trends over time (stacked area chart)
-- Smart trend detection (alerts if spending up/down >10%)
+- **Daily spending with anomaly detection** (Bollinger-style volatility bands)
+- **Spending pace gauge** - Real-time vs expected spending meter
+- **Cumulative spending with budget goals** and projections
+- **Category momentum tracker** - Shows which categories are growing/shrinking
+- **Smart alerts** for unusual spending spikes
+- Moving averages (3-day, 7-day, 14-day)
 
 **2. Time Patterns Tab:**
-- Day of week analysis
-- Weekday vs weekend comparison
-- Spending heatmap by week and day
-- Identifies your highest/lowest spending days
+- Day of week analysis with transaction counts
+- Weekday vs weekend spending comparison
+- **Spending heatmap** by week and day
+- Identifies highest/lowest spending days
+- Visual calendar of spending patterns
 
 **3. Categories Tab:**
-- Category distribution pie chart
-- Top 10 merchants bar chart
-- Detailed category breakdown table
+- Category distribution pie chart (interactive drill-down)
+- Top 10 merchants horizontal bar chart
+- **Detailed category breakdown table** with statistics
 - Transaction counts and averages per category
+- Category spending trends over time
 
 **4. Cards Tab:**
-- Spending distribution by card
-- Card usage timeline
-- Side-by-side card comparison
+- Spending distribution by card (pie chart)
+- Card usage timeline (area chart)
+- **Side-by-side card comparison table**
 - Individual card performance metrics
+- Multi-card spending overlay
+
+**5. Goals & Forecasts Tab (NEW!):**
+- **Budget performance waterfall chart** - Visual variance analysis
+- **Budget health score** (0-100 scale)
+- **7-day spending forecast** using trend analysis
+- **Financial health dashboard** with 4 gauges:
+  - Savings Rate
+  - Budget Efficiency  
+  - Spending Diversity
+  - Activity Score
+- Budget vs actual comparison
+
+**6. Merchant Insights Tab (NEW!):**
+- **Top 10 merchants** by total spending (with visit frequency indicators)
+- **Merchant loyalty score** - Frequency × spend analysis (top 10 ranked)
+- **Spending trends** for top 10 merchants over time (Line/Area/Scatter views)
+- **Visit frequency heatmap** - Which days you visit each merchant (top 10)
+- **Spending distribution** - Sunburst chart showing category → merchant breakdown
+- **Average ticket size** comparison across top merchants
+- **Key insights dashboard** - Top merchant, most frequent, highest average spend
+- **Comprehensive merchant table** - Top 20 with detailed metrics
+- Automatically filters out payments, credits, and refunds for accurate merchant analysis
 
 ### 🎯 Budget Management
 - Set monthly budget limits per category
@@ -82,6 +109,43 @@ A powerful, intelligent budget tracking application that automatically parses cr
 - **Miles/Points Tracking:** Extracts loyalty program data (Barclays)
 - **Due Date Alerts:** Color-coded warnings for upcoming/overdue payments
 - **Transaction Categorization:** AI-powered categorization into 15+ categories
+
+### 🚀 Advanced Analytics Features
+
+#### 📊 Anomaly Detection
+- **Bollinger-style volatility bands** show your typical spending range
+- Automatically flags spending spikes above normal patterns
+- Detailed breakdown of anomaly dates and amounts
+
+#### ⚡ Spending Pace Intelligence
+- Real-time gauge showing actual vs expected spending
+- Color-coded zones (green = under budget, yellow = on track, red = over pace)
+- Day-by-day progress tracking
+
+#### 🎯 Predictive Forecasting
+- **7-day spending forecast** based on recent trends
+- Historical pattern analysis
+- Budget runway calculations
+- Projected month-end totals
+
+#### 💎 Financial Health Scoring
+Four comprehensive health metrics:
+1. **Savings Rate** - Income vs expenses efficiency
+2. **Budget Efficiency** - How well you stick to budgets
+3. **Spending Diversity** - Category distribution health
+4. **Activity Score** - Transaction frequency patterns
+
+#### 🏪 Merchant Intelligence
+- **Loyalty scoring** - Identifies your most frequented merchants
+- **Visit pattern heatmaps** - Discover when you shop where
+- **Average ticket analysis** - Compare transaction sizes
+- **Trend tracking** - See merchant spending over time
+
+#### 📈 Category Momentum
+- Tracks which categories are growing/shrinking
+- First-half vs second-half comparison
+- Percentage change indicators
+- Early warning system for budget creep
 
 ### 🎨 Modern UI/UX
 - Responsive wide layout
@@ -335,22 +399,19 @@ docker run -p 8501:8501 budget-tracker
 ## 🎯 Transaction Categories
 
 The app automatically categorizes transactions into:
-- 🍔 Food & Dining
-- 🛒 Groceries
-- ⛽ Gas & Transportation
-- 🛍️ Shopping
-- 🎬 Entertainment
-- 💊 Healthcare
-- 🏠 Home & Utilities
-- ✈️ Travel
-- 🎓 Education
-- 💼 Professional Services
-- 🏦 Finance & Banking
-- 🚗 Automotive
-- 💰 Income/Payments
-- 🔧 Home Improvement
-- 📱 Subscriptions
-- ❓ Other
+- 💰 **Income/Payments** - Credit card payments, deposits, transfers, refunds
+- 🛒 **Groceries** - Walmart, Target, Costco, Kroger, Indian grocery stores (Indifresh, Suvidha)
+- 🍔 **Food & Dining** - Restaurants, cafes, fast food, pizza, delivery, bakeries
+- 💡 **Bills & Utilities** - Electric, water, gas, internet, phone (AT&T, Verizon), Apple services
+- 🚗 **Transportation** - Gas stations, Costco Gas, parking, ride-sharing
+- 💊 **Healthcare** - Pharmacies, doctors, labs, clinics, medical services
+- � **Home Improvement** - Home Depot, Lowe's, hardware stores, paint, tools
+- 🛍️ **Shopping** - Amazon, retail stores (Ross, TJ Maxx, Macy's, Kohl's), online marketplaces
+- 📱 **Subscriptions** - Netflix, Spotify, YouTube Premium, Adobe, GitHub, gym memberships
+- � **Entertainment** - Movies, theaters, concerts, events, gaming
+- 💼 **Professional Services** - Haircuts, salons, consultants, warranty services (AHS)
+- 🏦 **Finance & Banking** - Bank fees, interest charges, electronic payments, late fees
+- ❓ **Other** - Uncategorized transactions
 
 ---
 
@@ -409,16 +470,28 @@ To add support for a new bank/card:
 
 ## 📝 Roadmap
 
+**Recently Implemented:** ✅
+- [x] Anomaly detection for spending spikes
+- [x] Spending pace tracking and forecasting
+- [x] Budget variance waterfall charts
+- [x] Financial health scoring system
+- [x] Merchant loyalty analysis
+- [x] 7-day spending forecasts
+- [x] Category momentum tracking
+
+**Coming Soon:**
 - [ ] Machine learning for improved categorization
-- [ ] Expense forecasting and predictions
+- [ ] Subscription detection and recurring payment tracking
 - [ ] Bill reminder notifications
-- [ ] Export to Excel/CSV
-- [ ] Multiple currency support
-- [ ] Monthly comparison reports
-- [ ] Savings goals tracking
-- [ ] Subscription detection and management
+- [ ] Export to Excel/CSV with full analytics
+- [ ] Multiple currency support with live exchange rates
+- [ ] Year-over-year comparison reports
+- [ ] Savings goals tracking with milestones
 - [ ] Receipt OCR integration
-- [ ] Mobile app version
+- [ ] Mobile app version (React Native)
+- [ ] Paycheck effect visualization
+- [ ] Hour-of-day spending patterns
+- [ ] Card reward optimization recommendations
 
 ---
 
