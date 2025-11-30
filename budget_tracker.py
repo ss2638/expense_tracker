@@ -39,6 +39,7 @@ def extract_transactions_from_pdf(pdf_file):
     raw_text = ""
     in_transaction_section = False
     current_year = None
+    pending_sync_transaction = None  # Track last Synchrony transaction for multi-line descriptions
     card_info = {
         'card_name': 'Unknown Card',
         'last_4_digits': '****',
@@ -460,7 +461,8 @@ def extract_transactions_from_pdf(pdf_file):
                         continue
                     
                     # Stop at certain sections
-                    if "2025 Totals Year-to-Date" in line or "INTEREST CHARGES" in line or "Apple Card Monthly Installments" in line or "Daily Cash" in line:
+                    # Note: Don't stop at "Daily Cash" alone - it appears in Apple Card transaction columns
+                    if "2025 Totals Year-to-Date" in line or "INTEREST CHARGES" in line or "Apple Card Monthly Installments" in line or "Total Daily Cash this month" in line:
                         in_transaction_section = False
                         continue
                     
@@ -495,8 +497,14 @@ def extract_transactions_from_pdf(pdf_file):
                     
                     if in_transaction_section:
                         # Synchrony format: 10/28 70556 STORE 0678 CUMMING GA $19.98
+                        # Followed by product details on next line(s): "-, - COLLATED 23G, 18G BRADS..."
                         # Date Reference# Description Amount
                         match_sync = re.match(r'^(\d{1,2}/\d{1,2})\s+(\d+\s+)?(.+?)\s+(\-?\$[\d,]+\.\d{2})\s*$', line.strip())
+                        
+                        # Synchrony product detail line (starts with "-, -" or similar, or just product text without date/amount)
+                        # Check if line has no date pattern and no dollar amount (likely a continuation)
+                        is_potential_detail = not re.match(r'^\d{1,2}/\d{1,2}', line.strip()) and not re.search(r'\$[\d,]+\.\d{2}', line.strip())
+                        match_sync_detail = is_potential_detail and pending_sync_transaction is not None and len(line.strip()) > 3
                         
                         # DCU format: OCT02 EFT ACH AMEX EPAYMENT ACH PMT 251002 Raj DCU -402.53 9,278.35
                         # DATE TRANSACTION DESCRIPTION WITHDRAWALS DEPOSITS BALANCE
@@ -521,10 +529,11 @@ def extract_transactions_from_pdf(pdf_file):
                         match_chase = re.match(r'^(\d{1,2}/\d{1,2})\s+(.+?)\s+([-]?\d+\.\d{2})$', line.strip())
                         
                         # Apple Card format: MM/DD/YYYY Description Daily Cash% $X.XX $Amount
-                        match_apple = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+\d+%\s+\$?[\d.]+\s+([-]?\$?[\d,]+\.\d{2})$', line.strip())
+                        # Example: "10/05/2025 APPLE.COM/BILL ONE APPLE PARK WAY 866-712-7753 96014 CA USA 3% $1.35 $44.99"
+                        match_apple = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(\d+%)\s+\$?([\d.]+)\s+([-]?\$?[\d,]+\.\d{2})$', line.strip())
                         
-                        # Apple Card payment format: MM/DD/YYYY Description -$Amount
-                        match_apple_payment = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([-]\$?[\d,]+\.\d{2})$', line.strip())
+                        # Apple Card payment format: MM/DD/YYYY Description -$Amount or $Amount
+                        match_apple_payment = re.match(r'^(\d{2}/\d{2}/\d{4})\s+(.+?)\s+([-]?\$?[\d,]+\.\d{2})$', line.strip())
                         
                         # Discover format: MM/DD Description Category/Location $Amount or -$Amount
                         # Example: "10/13 PAYPAL *WALMART COM WAL 888-221-1161 Supermarkets $42.76"
@@ -551,15 +560,34 @@ def extract_transactions_from_pdf(pdf_file):
                                 # Skip section headers and summary lines
                                 skip_keywords = ["Payments", "Other Credits", "Purchases and Other Debits", "Total", "Invoice Number"]
                                 if not any(keyword in description for keyword in skip_keywords):
-                                    # Clean up description - remove store numbers and extra details
-                                    description = re.sub(r'STORE\s+\d+', '', description)
+                                    # Clean up description - keep meaningful parts
+                                    description = re.sub(r'STORE\s+\d+\s+', '', description)  # Remove "STORE 0678 "
                                     description = re.sub(r'\s+[A-Z]{2}$', '', description)  # Remove state codes at end
-                                    description = re.sub(r'^-,\s*-\s*', '', description)  # Remove "-, -" prefixes
-                                    transactions.append([date, description.strip(), amount])
+                                    
+                                    # Store this transaction temporarily to potentially add product details
+                                    pending_sync_transaction = [date, description.strip(), amount]
+                                    transactions.append(pending_sync_transaction)
                             except Exception as e:
+                                pending_sync_transaction = None
                                 continue
                         
+                        elif match_sync_detail:
+                            # This is a product detail line for the previous Synchrony transaction
+                            # Append to the description of the last transaction
+                            detail = line.strip()
+                            # Remove common prefixes like "-, -" or "-,-"
+                            detail = re.sub(r'^[-,\s]+', '', detail)
+                            if detail and len(detail) > 3:  # Only add meaningful details
+                                # Update the description in the last added transaction
+                                pending_sync_transaction[1] += " - " + detail
+                            continue
+                        
+                        elif not match_sync_detail and pending_sync_transaction:
+                            # No longer in detail lines, clear pending transaction
+                            pending_sync_transaction = None
+                        
                         elif match_dcu:
+                            pending_sync_transaction = None  # Clear pending Synchrony transaction
                             month_abbr = match_dcu.group(1)  # OCT
                             day = match_dcu.group(2)         # 02
                             description = match_dcu.group(3).strip()
@@ -590,6 +618,7 @@ def extract_transactions_from_pdf(pdf_file):
                                 continue
                         
                         elif match_barclays:
+                            pending_sync_transaction = None  # Clear pending Synchrony transaction
                             trans_month = match_barclays.group(1)  # Nov
                             trans_day = match_barclays.group(2)    # 10
                             post_month = match_barclays.group(3)   # Nov
@@ -717,7 +746,9 @@ def extract_transactions_from_pdf(pdf_file):
                         elif match_apple:
                             date_str = match_apple.group(1)
                             description = match_apple.group(2).strip()
-                            amount_str = match_apple.group(3).replace('$', '').replace(',', '')
+                            daily_cash_percent = match_apple.group(3)  # e.g., "3%"
+                            daily_cash_amount = match_apple.group(4)   # e.g., "1.35"
+                            amount_str = match_apple.group(5).replace('$', '').replace(',', '')
                             
                             try:
                                 date = pd.to_datetime(date_str, format='%m/%d/%Y')
@@ -740,7 +771,10 @@ def extract_transactions_from_pdf(pdf_file):
                             
                             try:
                                 date = pd.to_datetime(date_str, format='%m/%d/%Y')
-                                amount = float(amount_str)  # Already negative
+                                amount = float(amount_str)
+                                # Make payments positive if they're showing as negative
+                                if amount < 0:
+                                    amount = abs(amount)
                                 
                                 transactions.append([date, description, amount])
                             except Exception as e:
@@ -767,31 +801,147 @@ def extract_transactions_from_pdf(pdf_file):
 
 # Categorization function
 def categorize(description):
-    description = description.lower()
+    description_lower = description.lower()
     
-    # Shopping
-    if "amazon" in description or "shopping" in description or "mall" in description:
-        return "Shopping"
-    # Food & Groceries
-    elif any(word in description for word in ["grocery", "supermarket", "whole foods", "trader joe", "safeway", "kroger", "food", "restaurant", "cafe", "starbucks", "mcdonald", "chipotle"]):
+    # ========== PRIORITY 1: Income & Payments (CHECK FIRST) ==========
+    payment_keywords = [
+        "payment thank you", "online payment", "autopay", "automatic payment",
+        "payment received", "payment - thank you", "mobile payment",
+        "internet payment", "ach deposit", "internet transfer",
+        "payroll", "salary", "direct deposit",
+        "statement credit", "adjustment credit", "fee reversal", 
+        "interest refund", "balance transfer", "electronic payment"
+    ]
+    # Exclude: Regular PayPal purchases should not be treated as payments
+    if any(keyword in description_lower for keyword in payment_keywords):
+        # But check if it's a PayPal purchase (not a payment)
+        if "paypal" in description_lower and any(merchant in description_lower for merchant in ["walmart", "adobe", "ebay"]):
+            pass  # Continue to regular categorization
+        else:
+            return "Income/Payments"
+    
+    # ========== PRIORITY 2: Groceries & Food ==========
+    # Grocery Stores
+    grocery_stores = [
+        "walmart", "wm supercenter", "wal-mart", "target", "costco", "sam's club",
+        "kroger", "publix", "whole foods", "trader joe", "safeway", "albertsons",
+        "aldi", "lidl", "food lion", "giant", "stop & shop", "wegmans",
+        "indifresh", "suvidha", "patel brothers", "indian grocery"
+    ]
+    if any(store in description_lower for store in grocery_stores):
+        return "Groceries"
+    
+    # Restaurants & Dining
+    restaurants = [
+        "restaurant", "cafe", "coffee", "starbucks", "dunkin", "mcdonald",
+        "burger", "pizza", "domino", "papa john", "chipotle", "taco bell",
+        "subway", "panera", "chick-fil-a", "wendy", "kfc", "arby",
+        "zaxby", "desi street", "biryani", "chutney", "flippin pizza",
+        "steakhouse", "grill", "bakery", "bar", "pub", "tap room",
+        "applebee", "chili", "olive garden", "red lobster", "outback",
+        "kilwins", "confections", "indi fresh", "jerusalem bakery",
+        "barleygarden", "brew deck", "craft burger"
+    ]
+    if any(restaurant in description_lower for restaurant in restaurants):
         return "Food & Dining"
-    # Housing
-    elif any(word in description for word in ["rent", "lease", "mortgage", "apartment"]):
-        return "Housing"
-    # Transportation
-    elif any(word in description for word in ["uber", "lyft", "taxi", "gas", "fuel", "parking", "transit", "commute"]):
-        return "Transportation"
-    # Entertainment
-    elif any(word in description for word in ["netflix", "hulu", "spotify", "movie", "theater", "gaming", "entertainment"]):
-        return "Entertainment"
-    # Bills & Utilities
-    elif any(word in description for word in ["electric", "water", "internet", "phone", "utility", "bill", "insurance"]):
+    
+    # ========== PRIORITY 3: Bills & Utilities ==========
+    utilities = [
+        "utility", "electric", "power", "water", "gas", "natgas", "sawnee",
+        "georgia power", "at&t", "verizon", "t-mobile", "comcast", "xfinity",
+        "internet", "cable", "phone", "wireless", "apple.com/bill",
+        "sanitation", "waste", "trash", "garbage", "sewage"
+    ]
+    if any(util in description_lower for util in utilities):
         return "Bills & Utilities"
-    # Income & Payments
-    elif any(word in description for word in ["salary", "payroll", "payment thank you", "refund", "deposit"]):
-        return "Income/Payments"
-    else:
-        return "Other"
+    
+    # ========== PRIORITY 4: Transportation ==========
+    transportation = [
+        "gas", "fuel", "shell", "exxon", "chevron", "bp", "mobil",
+        "uber", "lyft", "taxi", "parking", "transit", "toll",
+        "costco gas", "gas station", "natgas"
+    ]
+    if any(trans in description_lower for trans in transportation):
+        # Exception: Natural gas is a utility, not transportation
+        if "natgas" in description_lower or "georgia natural" in description_lower:
+            return "Bills & Utilities"
+        return "Transportation"
+    
+    # ========== PRIORITY 5: Healthcare ==========
+    healthcare = [
+        "pharmacy", "cvs", "walgreens", "rite aid", "doctor", "hospital",
+        "medical", "dental", "vision", "lab", "laboratory", "clinic",
+        "health", "medicine", "prescription", "inspire ob"
+    ]
+    if any(health in description_lower for health in healthcare):
+        return "Healthcare"
+    
+    # ========== PRIORITY 6: Home Improvement ==========
+    home_improvement = [
+        "home depot", "lowe", "lowes", "ace hardware", "true value",
+        "menards", "harbor freight", "lumber", "hardware",
+        "furring", "veneer", "valspar", "paint", "roller", "jigsaw"
+    ]
+    if any(store in description_lower for store in home_improvement):
+        return "Home Improvement"
+    
+    # ========== PRIORITY 7: Shopping (Retail & Online) ==========
+    # Online marketplaces
+    if "amazon" in description_lower or "amzn" in description_lower or "ebay" in description_lower:
+        return "Shopping"
+    
+    # Retail stores
+    retail_stores = [
+        "macy", "kohl", "jcpenney", "nordstrom", "dillard", "sears",
+        "ross", "tj maxx", "marshalls", "burlington", "target.com",
+        "h&m", "zara", "gap", "old navy", "banana republic",
+        "dollar tree", "dollar general", "five below", "big lots",
+        "hobby lobby", "michaels", "joann", "craft",
+        "best buy", "apple store", "microsoft store",
+        "rack room shoes", "foot locker", "nike", "adidas"
+    ]
+    if any(store in description_lower for store in retail_stores):
+        return "Shopping"
+    
+    # ========== PRIORITY 8: Subscriptions ==========
+    subscriptions = [
+        "netflix", "hulu", "disney", "prime video", "hbo", "paramount",
+        "spotify", "apple music", "youtube", "youtube premium",
+        "adobe", "microsoft 365", "office 365", "dropbox", "icloud",
+        "github", "playstation", "xbox", "nintendo", "steam",
+        "gym", "fitness", "active n fit"
+    ]
+    if any(sub in description_lower for sub in subscriptions):
+        return "Subscriptions"
+    
+    # ========== PRIORITY 9: Entertainment ==========
+    entertainment = [
+        "movie", "theater", "cinema", "amc", "regal", "cinemark",
+        "concert", "ticket", "event", "sports", "game"
+    ]
+    if any(ent in description_lower for ent in entertainment):
+        return "Entertainment"
+    
+    # ========== PRIORITY 10: Professional Services ==========
+    services = [
+        "haircut", "salon", "barber", "spa", "massage",
+        "lawyer", "attorney", "accountant", "consultant",
+        "ahs.com", "warranty", "protection plan"
+    ]
+    if any(service in description_lower for service in services):
+        return "Professional Services"
+    
+    # ========== PRIORITY 11: Finance & Banking ==========
+    finance = [
+        "bank fee", "atm", "wire transfer", "money order",
+        "interest charged", "late fee", "annual fee",
+        "electronic payment", "ba electronic"
+    ]
+    if any(fin in description_lower for fin in finance):
+        return "Finance & Banking"
+    
+    # ========== DEFAULT: Other ==========
+    return "Other"
 
 # Upload Multiple PDFs
 st.sidebar.header("📄 Upload Statements")
@@ -824,6 +974,12 @@ if uploaded_pdfs:
         
         # Add categories
         df["Category"] = df["Description"].apply(categorize)
+        
+        # Fix amount signs: Payments/Credits should be positive (they reduce what you owe)
+        # Expenses should be negative (they increase what you owe)
+        # If a payment is currently negative, flip it to positive
+        df.loc[df["Category"] == "Income/Payments", "Amount"] = df.loc[df["Category"] == "Income/Payments", "Amount"].abs()
+        
         df = df.sort_values('Date').reset_index(drop=True)
         
         st.sidebar.success(f"✅ Loaded {len(df)} unique transactions from {len(all_card_info)} statement(s)")
@@ -843,6 +999,7 @@ if uploaded_pdfs:
             "Card_Last4": ["0000"] * 10
         })
         df["Category"] = df["Description"].apply(categorize)
+        df.loc[df["Category"] == "Income/Payments", "Amount"] = df.loc[df["Category"] == "Income/Payments", "Amount"].abs()
         all_card_info = []
 else:
     st.info("👈 Upload your credit card statements to get started!")
@@ -854,6 +1011,7 @@ else:
         "Card_Last4": ["0000"] * 10
     })
     df["Category"] = df["Description"].apply(categorize)
+    df.loc[df["Category"] == "Income/Payments", "Amount"] = df.loc[df["Category"] == "Income/Payments", "Amount"].abs()
     all_card_info = []
 
 # Credit Card Summary Section
@@ -932,18 +1090,26 @@ if card_filter and 'Card' in filtered_df.columns:
 # Summary Metrics - Enhanced
 st.header("📊 Financial Overview")
 
-# Calculate metrics
-total_income = filtered_df[filtered_df["Amount"] > 0]["Amount"].sum()
-total_expenses = abs(filtered_df[filtered_df["Amount"] < 0]["Amount"].sum())
+# Filter out payment/credit transactions for accurate metrics
+non_payment_df = filtered_df[filtered_df["Category"] != "Income/Payments"].copy()
+payment_count = len(filtered_df) - len(non_payment_df)
+
+# Show info if payments were filtered
+if payment_count > 0:
+    st.info(f"ℹ️ **{payment_count} payment/credit transactions** filtered out from metrics and charts (Card payments, refunds, credits, etc.)")
+
+# Calculate metrics (excluding payments)
+total_income = non_payment_df[non_payment_df["Amount"] > 0]["Amount"].sum()
+total_expenses = abs(non_payment_df[non_payment_df["Amount"] < 0]["Amount"].sum())
 net_balance = total_income - total_expenses
-transaction_count = len(filtered_df)
+transaction_count = len(non_payment_df)
 
 # Calculate additional insights
-expenses_df_temp = filtered_df[filtered_df["Amount"] < 0].copy()
+expenses_df_temp = non_payment_df[non_payment_df["Amount"] < 0].copy()
 if not expenses_df_temp.empty:
     avg_daily_spending = abs(expenses_df_temp.groupby("Date")["Amount"].sum().mean())
     largest_expense = abs(expenses_df_temp["Amount"].min())
-    days_in_period = (filtered_df["Date"].max() - filtered_df["Date"].min()).days + 1
+    days_in_period = (non_payment_df["Date"].max() - non_payment_df["Date"].min()).days + 1
     projected_monthly = (total_expenses / days_in_period) * 30 if days_in_period > 0 else 0
 else:
     avg_daily_spending = 0
@@ -986,8 +1152,8 @@ st.divider()
 # Enhanced Visualizations - TRENDS FOCUSED
 st.header("� Spending Trends & Analysis")
 
-# Prepare expenses data
-expenses_df = filtered_df[filtered_df["Amount"] < 0].copy()
+# Prepare expenses data (exclude payment transactions)
+expenses_df = filtered_df[(filtered_df["Amount"] < 0) & (filtered_df["Category"] != "Income/Payments")].copy()
 expenses_df["Amount"] = abs(expenses_df["Amount"])
 
 # Row 1: Main trend lines
@@ -1241,8 +1407,8 @@ st.divider()
 # Enhanced Visualizations with Tabs
 st.header("📈 Spending Trends & Insights")
 
-# Prepare data
-expenses_df = filtered_df[filtered_df["Amount"] < 0].copy()
+# Prepare data (exclude payment transactions)
+expenses_df = filtered_df[(filtered_df["Amount"] < 0) & (filtered_df["Category"] != "Income/Payments")].copy()
 expenses_df["Amount"] = abs(expenses_df["Amount"])
 
 if not expenses_df.empty:
@@ -1251,27 +1417,61 @@ if not expenses_df.empty:
     expenses_df['Month'] = expenses_df['Date'].dt.to_period('M').astype(str)
 
 # Create tabs for organized viewing
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "📅 Time Patterns", "🏷️ Categories", "💳 Cards"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Overview", "📅 Time Patterns", "🏷️ Categories", "💳 Cards", "🎯 Goals & Forecasts", "💰 Merchant Insights"])
 
 with tab1:
+    # Row 1: Main trends with enhancements
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Daily Spending with Moving Averages**")
+        st.markdown("**📈 Daily Spending with Anomaly Detection**")
         if not expenses_df.empty:
             daily_spending = expenses_df.groupby("Date")["Amount"].sum().reset_index()
             daily_spending['7-Day MA'] = daily_spending['Amount'].rolling(window=7, min_periods=1).mean()
             daily_spending['14-Day MA'] = daily_spending['Amount'].rolling(window=14, min_periods=1).mean()
             
+            # Calculate volatility bands (Bollinger-style)
+            daily_spending['Std'] = daily_spending['Amount'].rolling(window=7, min_periods=1).std()
+            daily_spending['Upper Band'] = daily_spending['7-Day MA'] + (2 * daily_spending['Std'])
+            daily_spending['Lower Band'] = daily_spending['7-Day MA'] - (2 * daily_spending['Std'])
+            
+            # Detect anomalies (spending > upper band)
+            daily_spending['Anomaly'] = daily_spending['Amount'] > daily_spending['Upper Band']
+            
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=daily_spending['Date'], y=daily_spending['Amount'],
+            
+            # Normal spending (bars)
+            normal_days = daily_spending[~daily_spending['Anomaly']]
+            fig.add_trace(go.Bar(x=normal_days['Date'], y=normal_days['Amount'],
                                 name='Daily', marker_color='rgba(255,107,107,0.6)'))
+            
+            # Anomalies (highlighted bars)
+            anomaly_days = daily_spending[daily_spending['Anomaly']]
+            if not anomaly_days.empty:
+                fig.add_trace(go.Bar(x=anomaly_days['Date'], y=anomaly_days['Amount'],
+                                    name='⚠️ Spike', marker_color='rgba(239,68,68,0.9)'))
+            
+            # Moving averages
             fig.add_trace(go.Scatter(x=daily_spending['Date'], y=daily_spending['7-Day MA'],
                                     mode='lines', name='7-Day Avg', line=dict(color='#4ECDC4', width=3)))
-            fig.add_trace(go.Scatter(x=daily_spending['Date'], y=daily_spending['14-Day MA'],
-                                    mode='lines', name='14-Day Avg', line=dict(color='#A78BFA', width=2, dash='dash')))
+            
+            # Volatility bands (shaded area)
+            fig.add_trace(go.Scatter(x=daily_spending['Date'], y=daily_spending['Upper Band'],
+                                    mode='lines', name='Upper Band', line=dict(width=0),
+                                    showlegend=False))
+            fig.add_trace(go.Scatter(x=daily_spending['Date'], y=daily_spending['Lower Band'],
+                                    mode='lines', name='Lower Band', line=dict(width=0),
+                                    fill='tonexty', fillcolor='rgba(78,205,196,0.1)',
+                                    showlegend=True))
+            
             fig.update_layout(height=400, hovermode='x unified')
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Smart alerts
+            if not anomaly_days.empty:
+                st.warning(f"🚨 {len(anomaly_days)} anomaly spike(s) detected!")
+                for _, row in anomaly_days.head(3).iterrows():
+                    st.write(f"• {row['Date'].strftime('%b %d')}: ${row['Amount']:.2f} (${row['Amount'] - row['7-Day MA']:.2f} above avg)")
             
             if len(daily_spending) >= 7:
                 recent_avg = daily_spending['Amount'].tail(7).mean()
@@ -1287,28 +1487,146 @@ with tab1:
             st.info("No expense data")
     
     with col2:
-        st.markdown("**Cumulative Spending**")
+        st.markdown("**⚡ Spending Pace Gauge**")
+        if not expenses_df.empty:
+            days_elapsed = (filtered_df['Date'].max() - filtered_df['Date'].min()).days + 1
+            days_in_month = 30
+            
+            total_spent = expenses_df['Amount'].sum()
+            expected_by_now = (total_spent / days_elapsed) * min(days_elapsed, days_in_month)
+            
+            # Gauge chart
+            pace_pct = (total_spent / expected_by_now * 100) if expected_by_now > 0 else 100
+            
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number+delta",
+                value=total_spent,
+                delta={'reference': expected_by_now, 'valueformat': '$,.0f'},
+                title={'text': f"Spending vs Expected<br><sub>Day {days_elapsed} of {days_in_month}</sub>"},
+                gauge={
+                    'axis': {'range': [None, expected_by_now * 1.5]},
+                    'bar': {'color': '#FF6B6B'},
+                    'steps': [
+                        {'range': [0, expected_by_now * 0.8], 'color': '#D1FAE5'},
+                        {'range': [expected_by_now * 0.8, expected_by_now * 1.2], 'color': '#FEF3C7'},
+                        {'range': [expected_by_now * 1.2, expected_by_now * 1.5], 'color': '#FEE2E2'}
+                    ],
+                    'threshold': {
+                        'line': {'color': '#3B82F6', 'width': 4},
+                        'thickness': 0.75,
+                        'value': expected_by_now
+                    }
+                }
+            ))
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Pace insights
+            if pace_pct > 120:
+                st.error(f"🔥 Spending {pace_pct-100:.0f}% faster than expected!")
+            elif pace_pct < 80:
+                st.success(f"💚 Spending {100-pace_pct:.0f}% slower than expected!")
+            else:
+                st.info(f"📊 On pace (±20% of expected)")
+        else:
+            st.info("No expense data")
+    
+    # Row 2: Enhanced cumulative + category breakdown
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**📊 Cumulative Spending with Budget Goal**")
         if not expenses_df.empty:
             daily_spending = expenses_df.groupby("Date")["Amount"].sum().reset_index()
             daily_spending['Cumulative'] = daily_spending['Amount'].cumsum()
             
+            # Calculate projected end-of-period
+            days_elapsed = (daily_spending['Date'].max() - daily_spending['Date'].min()).days + 1
+            total_spent = daily_spending['Cumulative'].iloc[-1]
+            daily_rate = total_spent / days_elapsed if days_elapsed > 0 else 0
+            projected_total = daily_rate * 30
+            
             fig = go.Figure()
+            
+            # Actual cumulative
             fig.add_trace(go.Scatter(x=daily_spending['Date'], y=daily_spending['Cumulative'],
-                                    mode='lines', fill='tozeroy', name='Cumulative',
+                                    mode='lines', fill='tozeroy', name='Actual Spending',
                                     line=dict(color='#FF6B6B', width=3),
                                     fillcolor='rgba(255,107,107,0.2)'))
+            
+            # Projected line
+            if days_elapsed < 30:
+                future_date = daily_spending['Date'].max() + pd.Timedelta(days=30-days_elapsed)
+                fig.add_trace(go.Scatter(x=[daily_spending['Date'].max(), future_date],
+                                        y=[total_spent, projected_total],
+                                        mode='lines', name='Projected',
+                                        line=dict(color='#A78BFA', width=2, dash='dash')))
+            
+            # Budget goal line (if available from sidebar)
+            if 'budget_goals' in locals():
+                total_budget = sum(v for k, v in budget_goals.items() if k != "Income/Payments" and v > 0)
+                if total_budget > 0:
+                    fig.add_trace(go.Scatter(x=[daily_spending['Date'].min(), daily_spending['Date'].max()],
+                                            y=[total_budget, total_budget],
+                                            mode='lines', name='Budget Goal',
+                                            line=dict(color='#10B981', width=2, dash='dot')))
+            
             fig.update_layout(height=400, hovermode='x unified')
             st.plotly_chart(fig, use_container_width=True)
             
-            if len(daily_spending) > 1:
-                days_elapsed = (daily_spending['Date'].max() - daily_spending['Date'].min()).days + 1
-                total_spent = daily_spending['Cumulative'].iloc[-1]
-                daily_velocity = total_spent / days_elapsed if days_elapsed > 0 else 0
-                st.info(f"💨 ${daily_velocity:.2f}/day → ${daily_velocity * 30:.2f}/month projected")
+            st.info(f"💨 **Daily Rate:** ${daily_rate:.2f}/day → **Projected:** ${projected_total:.2f}/month")
         else:
             st.info("No expense data")
     
-    st.markdown("**Category Trends Over Time**")
+    with col2:
+        st.markdown("**🎯 Category Momentum (% Change)**")
+        if not expenses_df.empty and len(expenses_df) > 14:
+            # Calculate first half vs second half spending
+            mid_date = expenses_df['Date'].min() + (expenses_df['Date'].max() - expenses_df['Date'].min()) / 2
+            
+            first_half = expenses_df[expenses_df['Date'] <= mid_date].groupby('Category')['Amount'].sum()
+            second_half = expenses_df[expenses_df['Date'] > mid_date].groupby('Category')['Amount'].sum()
+            
+            # Calculate % change
+            momentum = pd.DataFrame({
+                'First Half': first_half,
+                'Second Half': second_half
+            }).fillna(0)
+            
+            momentum['Change %'] = ((momentum['Second Half'] - momentum['First Half']) / momentum['First Half'] * 100).fillna(0)
+            momentum = momentum.sort_values('Change %', ascending=False)
+            
+            # Create diverging bar chart
+            fig = go.Figure()
+            
+            colors = ['#EF4444' if x > 20 else '#F59E0B' if x > 0 else '#10B981' for x in momentum['Change %']]
+            
+            fig.add_trace(go.Bar(
+                y=momentum.index,
+                x=momentum['Change %'],
+                orientation='h',
+                marker_color=colors,
+                text=[f"{x:+.0f}%" for x in momentum['Change %']],
+                textposition='outside'
+            ))
+            
+            fig.update_layout(
+                height=400,
+                xaxis_title="Change (%)",
+                yaxis={'categoryorder': 'total ascending'},
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Top movers
+            growing = momentum[momentum['Change %'] > 20].index.tolist()
+            if growing:
+                st.warning(f"📈 Growing: {', '.join(growing[:3])}")
+        else:
+            st.info("Need at least 14 days of data")
+    
+    # Full-width: Category trends area chart
+    st.markdown("**🏷️ Category Spending Trends Over Time**")
     if not expenses_df.empty:
         category_daily = expenses_df.groupby(['Date', 'Category'])['Amount'].sum().reset_index()
         fig = px.area(category_daily, x='Date', y='Amount', color='Category', height=350)
@@ -1435,6 +1753,479 @@ with tab4:
     else:
         st.info("Upload multiple card statements to see card comparison")
 
+with tab5:
+    st.subheader("🎯 Goals, Forecasts & Financial Health")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**💵 Budget Performance Overview**")
+        if not expenses_df.empty and 'budget_goals' in locals():
+            # Calculate budget metrics
+            budget_data = []
+            for cat in expenses_df['Category'].unique():
+                spent = expenses_df[expenses_df['Category'] == cat]['Amount'].sum()
+                limit = budget_goals.get(cat, 0)
+                if limit > 0:
+                    budget_data.append({
+                        'Category': cat,
+                        'Spent': spent,
+                        'Budget': limit,
+                        'Remaining': limit - spent,
+                        'Usage %': (spent / limit * 100)
+                    })
+            
+            if budget_data:
+                budget_df = pd.DataFrame(budget_data).sort_values('Usage %', ascending=False)
+                
+                # Waterfall chart showing budget variance
+                fig = go.Figure(go.Waterfall(
+                    x=budget_df['Category'],
+                    y=budget_df['Remaining'],
+                    text=[f"${x:.0f}" for x in budget_df['Remaining']],
+                    textposition="outside",
+                    connector={"line": {"color": "rgb(63, 63, 63)"}},
+                    decreasing={"marker": {"color": "#EF4444"}},
+                    increasing={"marker": {"color": "#10B981"}},
+                ))
+                fig.update_layout(
+                    title="Budget Variance by Category",
+                    height=400,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Budget health score
+                over_budget = len(budget_df[budget_df['Usage %'] > 100])
+                total_cats = len(budget_df)
+                health_score = max(0, 100 - (over_budget / total_cats * 100)) if total_cats > 0 else 100
+                
+                if health_score >= 80:
+                    st.success(f"💚 Budget Health: {health_score:.0f}/100 - Excellent!")
+                elif health_score >= 60:
+                    st.info(f"📊 Budget Health: {health_score:.0f}/100 - Good")
+                else:
+                    st.error(f"⚠️ Budget Health: {health_score:.0f}/100 - Needs Attention")
+            else:
+                st.info("Set budget goals in sidebar to see analysis")
+        else:
+            st.info("Set budget goals in sidebar")
+    
+    with col2:
+        st.markdown("**📈 Spending Forecast (Next 7 Days)**")
+        if not expenses_df.empty and len(expenses_df) >= 7:
+            # Simple forecast based on recent trend
+            daily_spending = expenses_df.groupby("Date")["Amount"].sum().reset_index()
+            recent_avg = daily_spending['Amount'].tail(7).mean()
+            
+            # Generate forecast dates
+            last_date = daily_spending['Date'].max()
+            forecast_dates = [last_date + pd.Timedelta(days=i) for i in range(1, 8)]
+            forecast_amounts = [recent_avg] * 7
+            
+            # Add some variance
+            import random
+            random.seed(42)
+            forecast_amounts_varied = [amt * (1 + random.uniform(-0.2, 0.2)) for amt in forecast_amounts]
+            
+            fig = go.Figure()
+            
+            # Historical
+            fig.add_trace(go.Scatter(
+                x=daily_spending['Date'].tail(14),
+                y=daily_spending['Amount'].tail(14),
+                mode='lines+markers',
+                name='Historical',
+                line=dict(color='#FF6B6B', width=2)
+            ))
+            
+            # Forecast
+            fig.add_trace(go.Scatter(
+                x=forecast_dates,
+                y=forecast_amounts_varied,
+                mode='lines+markers',
+                name='Forecast',
+                line=dict(color='#A78BFA', width=2, dash='dash')
+            ))
+            
+            fig.update_layout(height=400, hovermode='x unified')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            projected_week = sum(forecast_amounts_varied)
+            st.info(f"📊 Projected next 7 days: ${projected_week:.2f}")
+        else:
+            st.info("Need at least 7 days of data")
+    
+    # Full width: Financial Health Dashboard
+    st.markdown("**💎 Financial Health Snapshot**")
+    if not expenses_df.empty:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            # Savings rate
+            income_df = filtered_df[filtered_df['Amount'] > 0]
+            total_income = income_df['Amount'].sum()
+            total_expenses = expenses_df['Amount'].sum()
+            savings_rate = ((total_income - total_expenses) / total_income * 100) if total_income > 0 else 0
+            
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=savings_rate,
+                title={'text': "Savings Rate"},
+                gauge={
+                    'axis': {'range': [0, 100]},
+                    'bar': {'color': '#10B981'},
+                    'steps': [
+                        {'range': [0, 20], 'color': '#FEE2E2'},
+                        {'range': [20, 50], 'color': '#FEF3C7'},
+                        {'range': [50, 100], 'color': '#D1FAE5'}
+                    ]
+                },
+                number={'suffix': "%"}
+            ))
+            fig.update_layout(height=250)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Spending efficiency (vs budget)
+            if 'budget_goals' in locals():
+                total_budget = sum(v for k, v in budget_goals.items() if k != "Income/Payments" and v > 0)
+                efficiency = (total_budget - total_expenses) / total_budget * 100 if total_budget > 0 else 0
+                
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=max(0, efficiency),
+                    title={'text': "Budget Efficiency"},
+                    gauge={
+                        'axis': {'range': [0, 100]},
+                        'bar': {'color': '#3B82F6'},
+                        'steps': [
+                            {'range': [0, 20], 'color': '#FEE2E2'},
+                            {'range': [20, 50], 'color': '#FEF3C7'},
+                            {'range': [50, 100], 'color': '#D1FAE5'}
+                        ]
+                    },
+                    number={'suffix': "%"}
+                ))
+                fig.update_layout(height=250)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Set budgets")
+        
+        with col3:
+            # Category diversity (how spread out spending is)
+            cat_spending = expenses_df.groupby('Category')['Amount'].sum()
+            diversity = len(cat_spending) / 15 * 100  # 15 = total categories
+            
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=diversity,
+                title={'text': "Spending Diversity"},
+                gauge={
+                    'axis': {'range': [0, 100]},
+                    'bar': {'color': '#F59E0B'},
+                },
+                number={'suffix': "%"}
+            ))
+            fig.update_layout(height=250)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col4:
+            # Transaction frequency score
+            days_active = expenses_df['Date'].nunique()
+            total_days = (expenses_df['Date'].max() - expenses_df['Date'].min()).days + 1
+            frequency_score = days_active / total_days * 100 if total_days > 0 else 0
+            
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=frequency_score,
+                title={'text': "Activity Score"},
+                gauge={
+                    'axis': {'range': [0, 100]},
+                    'bar': {'color': '#8B5CF6'},
+                },
+                number={'suffix': "%"}
+            ))
+            fig.update_layout(height=250)
+            st.plotly_chart(fig, use_container_width=True)
+
+with tab6:
+    st.subheader("💰 Merchant Insights & Spending Patterns")
+    
+    if not expenses_df.empty:
+        # Filter out payments/credits/refunds from merchant analysis
+        merchant_df = expenses_df[~expenses_df['Category'].isin(['Income/Payments'])].copy()
+        
+        # Also filter out common payment keywords in description
+        payment_keywords = ['payment thank you', 'online payment', 'autopay', 'credit', 'refund', 
+                           'cashback', 'rewards', 'adjustment', 'fee reversal']
+        for keyword in payment_keywords:
+            merchant_df = merchant_df[~merchant_df['Description'].str.lower().str.contains(keyword, na=False)]
+        
+        if merchant_df.empty:
+            st.info("No merchant data available after filtering payments/credits")
+        else:
+            # Calculate merchant metrics
+            merchant_totals = merchant_df.groupby("Description")["Amount"].agg(['sum', 'count', 'mean']).reset_index()
+            merchant_totals.columns = ['Merchant', 'Total', 'Visits', 'Avg']
+            merchant_totals['Loyalty Score'] = merchant_totals['Visits'] * merchant_totals['Total'] / 100
+            merchant_totals = merchant_totals.sort_values('Total', ascending=False)
+        
+        # Top section: Key insights cards
+        st.markdown("### 📊 Key Merchant Insights")
+        
+        # Add custom CSS for smaller font in merchant metrics
+        st.markdown("""
+        <style>
+        [data-testid="stMetricValue"] {
+            font-size: 1rem !important;
+            line-height: 1.3 !important;
+        }
+        div[data-testid="stMetric"] label {
+            font-size: 0.9rem !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            top_merchant = merchant_totals.iloc[0]
+            st.metric(
+                "🏆 Top Merchant",
+                top_merchant['Merchant'][:30] + "..." if len(top_merchant['Merchant']) > 30 else top_merchant['Merchant'],
+                f"${top_merchant['Total']:.0f}"
+            )
+        
+        with col2:
+            most_frequent = merchant_totals.sort_values('Visits', ascending=False).iloc[0]
+            st.metric(
+                "🔄 Most Frequent",
+                most_frequent['Merchant'][:30] + "..." if len(most_frequent['Merchant']) > 30 else most_frequent['Merchant'],
+                f"{int(most_frequent['Visits'])} visits"
+            )
+        
+        with col3:
+            highest_avg = merchant_totals.sort_values('Avg', ascending=False).iloc[0]
+            st.metric(
+                "💎 Highest Avg",
+                highest_avg['Merchant'][:30] + "..." if len(highest_avg['Merchant']) > 30 else highest_avg['Merchant'],
+                f"${highest_avg['Avg']:.0f}"
+            )
+        
+        with col4:
+            total_merchants = len(merchant_totals)
+            avg_per_merchant = merchant_totals['Total'].mean()
+            st.metric(
+                "🏪 Total Merchants",
+                total_merchants,
+                f"${avg_per_merchant:.0f} avg"
+            )
+        
+        st.divider()
+        
+        # Row 1: Top 10 spending breakdown
+        col1, col2 = st.columns([1.2, 1])
+        
+        with col1:
+            st.markdown("**🏅 Top 10 Merchants by Total Spending**")
+            top_10 = merchant_totals.head(10)
+            
+            # Create a more detailed bar chart
+            fig = go.Figure()
+            
+            # Add bars with gradient colors
+            colors = ['#EF4444', '#F59E0B', '#F59E0B', '#FBBF24', '#FBBF24', 
+                     '#FCD34D', '#FCD34D', '#FDE68A', '#FDE68A', '#FEF3C7']
+            
+            fig.add_trace(go.Bar(
+                y=top_10['Merchant'],
+                x=top_10['Total'],
+                orientation='h',
+                marker=dict(color=colors),
+                text=[f"${x:.0f}" for x in top_10['Total']],
+                textposition='outside',
+                hovertemplate='<b>%{y}</b><br>Total: $%{x:.2f}<extra></extra>'
+            ))
+            
+            # Add visit count annotations
+            for i, row in top_10.iterrows():
+                fig.add_annotation(
+                    x=row['Total'] * 0.05,
+                    y=row['Merchant'],
+                    text=f"🔄 {int(row['Visits'])}",
+                    showarrow=False,
+                    font=dict(color='white', size=10),
+                    xanchor='left'
+                )
+            
+            fig.update_layout(
+                height=450,
+                xaxis_title="Total Spending ($)",
+                yaxis={'categoryorder': 'total ascending'},
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("**⭐ Loyalty Score Ranking**")
+            loyalty_top_10 = merchant_totals.sort_values('Loyalty Score', ascending=False).head(10)
+            
+            fig = go.Figure()
+            
+            # Create gradient from green to light green
+            max_score = loyalty_top_10['Loyalty Score'].max()
+            colors_loyalty = [f'rgba(16, 185, 129, {0.5 + (score/max_score)*0.5})' 
+                            for score in loyalty_top_10['Loyalty Score']]
+            
+            fig.add_trace(go.Bar(
+                y=loyalty_top_10['Merchant'],
+                x=loyalty_top_10['Loyalty Score'],
+                orientation='h',
+                marker=dict(color=colors_loyalty),
+                text=[f"{x:.0f}" for x in loyalty_top_10['Loyalty Score']],
+                textposition='outside',
+                hovertemplate='<b>%{y}</b><br>Score: %{x:.1f}<br>Visits: %{customdata[0]}<br>Total: $%{customdata[1]:.0f}<extra></extra>',
+                customdata=loyalty_top_10[['Visits', 'Total']].values
+            ))
+            
+            fig.update_layout(
+                height=450,
+                xaxis_title="Loyalty Score",
+                yaxis={'categoryorder': 'total ascending'},
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.info("💡 **Loyalty Score** = Visits × Total Spend / 100\n\nHigher score = More frequent + More expensive")
+        
+        # Row 2: Spending trends over time
+        st.markdown("**📈 Top 10 Merchants - Spending Timeline**")
+        
+        # Add selector for visualization type
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            chart_type = st.radio("Chart Type:", ["Line", "Area", "Scatter"], horizontal=True, key="merchant_chart_type")
+        
+        top_10_merchants = merchant_totals.head(10)['Merchant'].tolist()
+        merchant_timeline = merchant_df[merchant_df['Description'].isin(top_10_merchants)]
+        merchant_daily = merchant_timeline.groupby(['Date', 'Description'])['Amount'].sum().reset_index()
+        
+        if chart_type == "Line":
+            fig = px.line(merchant_daily, x='Date', y='Amount', color='Description',
+                         markers=True, height=400)
+        elif chart_type == "Area":
+            fig = px.area(merchant_daily, x='Date', y='Amount', color='Description', height=400)
+        else:  # Scatter
+            fig = px.scatter(merchant_daily, x='Date', y='Amount', color='Description',
+                           size='Amount', height=400)
+        
+        fig.update_layout(hovermode='x unified', legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Row 3: Detailed patterns
+        st.markdown("**� Detailed Merchant Patterns**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("*Visit Frequency Heatmap (Top 10)*")
+            merchant_dow = merchant_df.groupby(['Description', 'DayOfWeek']).size().reset_index(name='Count')
+            top_10_list = merchant_totals.head(10)['Merchant'].tolist()
+            merchant_dow_filtered = merchant_dow[merchant_dow['Description'].isin(top_10_list)]
+            
+            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            pivot = merchant_dow_filtered.pivot(index='Description', columns='DayOfWeek', values='Count').fillna(0)
+            pivot = pivot.reindex(columns=[d for d in day_order if d in pivot.columns])
+            
+            # Reorder by total visits
+            pivot['Total'] = pivot.sum(axis=1)
+            pivot = pivot.sort_values('Total', ascending=False).drop('Total', axis=1)
+            
+            fig = go.Figure(data=go.Heatmap(
+                z=pivot.values,
+                x=pivot.columns,
+                y=pivot.index,
+                colorscale='Blues',
+                text=pivot.values,
+                texttemplate='%{text:.0f}',
+                textfont={"size": 10},
+                hovertemplate='<b>%{y}</b><br>%{x}<br>Visits: %{z}<extra></extra>'
+            ))
+            fig.update_layout(height=450)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("*Spending Distribution by Merchant*")
+            
+            # Create a sunburst chart showing category > merchant breakdown
+            if 'Category' in merchant_df.columns:
+                top_10_with_cat = merchant_df[merchant_df['Description'].isin(top_10_list)].copy()
+                sunburst_data = top_10_with_cat.groupby(['Category', 'Description'])['Amount'].sum().reset_index()
+                
+                fig = px.sunburst(
+                    sunburst_data,
+                    path=['Category', 'Description'],
+                    values='Amount',
+                    height=450,
+                    color='Amount',
+                    color_continuous_scale='RdYlGn_r'
+                )
+                fig.update_traces(textinfo='label+percent entry')
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                # Fallback: Average ticket size
+                st.markdown("*Average Transaction Size (Top 10)*")
+                avg_ticket = merchant_totals.head(10)[['Merchant', 'Avg', 'Visits']].sort_values('Avg', ascending=False)
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    y=avg_ticket['Merchant'],
+                    x=avg_ticket['Avg'],
+                    orientation='h',
+                    marker=dict(
+                        color=avg_ticket['Avg'],
+                        colorscale='Oranges',
+                        showscale=True
+                    ),
+                    text=[f"${x:.0f}" for x in avg_ticket['Avg']],
+                    textposition='outside',
+                    hovertemplate='<b>%{y}</b><br>Avg: $%{x:.2f}<br>Visits: %{customdata}<extra></extra>',
+                    customdata=avg_ticket['Visits']
+                ))
+                fig.update_layout(
+                    height=450,
+                    xaxis_title="Average Transaction ($)",
+                    yaxis={'categoryorder': 'total ascending'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        # Bottom: Comprehensive merchant table
+        st.markdown("**📋 Complete Merchant Analysis Table**")
+        
+        # Create a rich dataframe with all metrics
+        merchant_table = merchant_totals.head(20).copy()
+        merchant_table['Total'] = merchant_table['Total'].apply(lambda x: f"${x:.2f}")
+        merchant_table['Avg'] = merchant_table['Avg'].apply(lambda x: f"${x:.2f}")
+        merchant_table['Visits'] = merchant_table['Visits'].astype(int)
+        merchant_table['Loyalty Score'] = merchant_table['Loyalty Score'].apply(lambda x: f"{x:.1f}")
+        
+        # Calculate spend percentage (based on actual merchant spending, not including payments)
+        total_merchant_spend = merchant_df['Amount'].sum()
+        merchant_totals['Spend %'] = (merchant_totals['Total'] / total_merchant_spend * 100).round(1)
+        merchant_table['Spend %'] = merchant_totals.head(20)['Spend %'].apply(lambda x: f"{x:.1f}%")
+        
+        merchant_table = merchant_table.reset_index(drop=True)
+        merchant_table.index = merchant_table.index + 1
+        
+        st.dataframe(
+            merchant_table[['Merchant', 'Total', 'Visits', 'Avg', 'Spend %', 'Loyalty Score']],
+            use_container_width=True,
+            height=400
+        )
+        
+    else:
+        st.info("No merchant data available")
+
 st.divider()
 
 # Budget Tracking Section (moved to bottom)
@@ -1529,7 +2320,7 @@ with col1:
     search_term = st.text_input("🔍 Search transactions", "")
 
 with col2:
-    transaction_type = st.selectbox("Transaction Type", ["All", "Expenses", "Income"])
+    transaction_type = st.selectbox("Transaction Type", ["All", "Expenses (Negative)", "Payments/Credits (Positive)"])
 
 with col3:
     sort_by = st.selectbox("Sort by", ["Date (Newest)", "Date (Oldest)", "Amount (High to Low)", "Amount (Low to High)"])
@@ -1540,9 +2331,9 @@ display_df = filtered_df.copy()
 if search_term:
     display_df = display_df[display_df['Description'].str.contains(search_term, case=False, na=False)]
 
-if transaction_type == "Expenses":
+if transaction_type == "Expenses (Negative)":
     display_df = display_df[display_df['Amount'] < 0]
-elif transaction_type == "Income":
+elif transaction_type == "Payments/Credits (Positive)":
     display_df = display_df[display_df['Amount'] > 0]
 
 # Apply sorting
@@ -1555,12 +2346,27 @@ elif sort_by == "Amount (High to Low)":
 elif sort_by == "Amount (Low to High)":
     display_df = display_df.sort_values('Amount', ascending=True)
 
-# Format the display
+# Format the display - keep Amount as numeric for proper sorting
 display_df_formatted = display_df.copy()
 display_df_formatted['Date'] = display_df_formatted['Date'].dt.strftime('%Y-%m-%d')
-display_df_formatted['Amount'] = display_df_formatted['Amount'].apply(lambda x: f"${x:,.2f}")
+# Keep Amount as float but use column_config to format display
 
-st.dataframe(display_df_formatted, use_container_width=True, hide_index=True)
+st.dataframe(
+    display_df_formatted, 
+    use_container_width=True, 
+    hide_index=True,
+    column_config={
+        "Amount": st.column_config.NumberColumn(
+            "Amount",
+            format="$%.2f",
+            help="Transaction amount"
+        ),
+        "Date": st.column_config.TextColumn(
+            "Date",
+            help="Transaction date"
+        )
+    }
+)
 
 # Export option
 st.download_button(
